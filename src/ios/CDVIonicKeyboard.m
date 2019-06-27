@@ -44,8 +44,6 @@ typedef enum : NSUInteger {
 
 @implementation CDVIonicKeyboard
 
-NSTimer *hideTimer;
-
 - (id)settingForKey:(NSString *)key
 {
     return [self.commandDelegate.settings objectForKey:[key lowercaseString]];
@@ -59,23 +57,21 @@ NSTimer *hideTimer;
 
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(statusBarDidChangeFrame:) name: UIApplicationDidChangeStatusBarFrameNotification object:nil];
 
-    self.keyboardResizes = ResizeNative;
+    self.keyboardResizes = ResizeNone;
     BOOL doesResize = [settings cordovaBoolSettingForKey:@"KeyboardResize" defaultValue:YES];
-    if (!doesResize) {
-        self.keyboardResizes = ResizeNone;
-        NSLog(@"CDVIonicKeyboard: no resize");
-
-    } else {
+    if (doesResize) {
         NSString *resizeMode = [settings cordovaSettingForKey:@"KeyboardResizeMode"];
         if (resizeMode) {
             if ([resizeMode isEqualToString:@"ionic"]) {
                 self.keyboardResizes = ResizeIonic;
             } else if ([resizeMode isEqualToString:@"body"]) {
                 self.keyboardResizes = ResizeBody;
+            } else if ([resizeMode isEqualToString:@"native"]) {
+                self.keyboardResizes = ResizeNative;
             }
         }
-        NSLog(@"CDVIonicKeyboard: resize mode %d", self.keyboardResizes);
     }
+    
     self.hideFormAccessoryBar = [settings cordovaBoolSettingForKey:@"HideKeyboardFormAccessoryBar" defaultValue:YES];
 
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
@@ -87,15 +83,9 @@ NSTimer *hideTimer;
 
     // Prevent WKWebView to resize window
     BOOL isWK = self.isWK = [self.webView isKindOfClass:NSClassFromString(@"WKWebView")];
-    if (!isWK) {
-        NSLog(@"CDVIonicKeyboard: WARNING!!: Keyboard plugin works better with WK");
-    }
 
     if (isWK) {
-        [nc removeObserver:self.webView name:UIKeyboardWillHideNotification object:nil];
-        [nc removeObserver:self.webView name:UIKeyboardWillShowNotification object:nil];
-        [nc removeObserver:self.webView name:UIKeyboardWillChangeFrameNotification object:nil];
-        [nc removeObserver:self.webView name:UIKeyboardDidChangeFrameNotification object:nil];
+        [self setDefaultKeyboardHandlingDisalbed:self.keyboardResizes != ResizeNone];
     }
 }
 
@@ -119,24 +109,17 @@ NSTimer *hideTimer;
         [self setKeyboardHeight:0 delay:0.01];
         [self resetScrollView];
     }
-    hideTimer = [NSTimer scheduledTimerWithTimeInterval:0 target:self selector:@selector(fireOnHiding) userInfo:nil repeats:NO];
-}
-
-- (void)fireOnHiding {
     [self.commandDelegate evalJs:@"Keyboard.fireOnHiding();"];
 }
 
 - (void)onKeyboardWillShow:(NSNotification *)note
 {
-    if (hideTimer != nil) {
-        [hideTimer invalidate];
-    }
     CGRect rect = [[note.userInfo valueForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue];
     double height = rect.size.height;
 
     if (self.isWK) {
         double duration = [[note.userInfo valueForKey:UIKeyboardAnimationDurationUserInfoKey] doubleValue];
-        [self setKeyboardHeight:height delay:duration+0.2];
+        [self setKeyboardHeight:height delay:duration/2.0];
         [self resetScrollView];
     }
 
@@ -166,7 +149,7 @@ NSTimer *hideTimer;
 - (void)setKeyboardHeight:(int)height delay:(NSTimeInterval)delay
 {
     if (self.keyboardResizes != ResizeNone) {
-        [self setPaddingBottom: height delay:delay];
+        [self setPaddingBottom:height delay:delay];
     }
 }
 
@@ -264,6 +247,43 @@ static IMP WKOriginalImp;
     _hideFormAccessoryBar = hideFormAccessoryBar;
 }
 
+static IMP keyboardWillChangeFrameOriginalIMP;
+static IMP keyboardDidChangeFrameOriginalIMP;
+static IMP keyboardWillShowOriginalIMP;
+static IMP keyboardDidShowOriginalIMP;
+
+- (void)setDefaultKeyboardHandlingDisalbed:(BOOL)shouldDisabledDefaultKBHandling
+{
+    NSString *keyboardWillChangeFrame = [@"_" stringByAppendingString:[@[@"keyboard", @"Will", @"Change", @"Frame:"] componentsJoinedByString:@""]];
+    Method keyboardWillChangeFrameMethod = class_getInstanceMethod(NSClassFromString(@"WKWebView"), NSSelectorFromString(keyboardWillChangeFrame));
+    NSString *keyboardDidChangeFrame = [@"_" stringByAppendingString:[@[@"keyboard", @"Did", @"Change", @"Frame:"] componentsJoinedByString:@""]];
+    Method keyboardDidChangeFrameMethod = class_getInstanceMethod(NSClassFromString(@"WKWebView"), NSSelectorFromString(keyboardDidChangeFrame));
+    NSString *keyboardWillShow = [@"_" stringByAppendingString:[@[@"keyboard", @"Will", @"Show:"] componentsJoinedByString:@""]];
+    Method keyboardWillShowMethod = class_getInstanceMethod(NSClassFromString(@"WKWebView"), NSSelectorFromString(keyboardWillShow));
+    NSString *keyboardDidShow = [@"_" stringByAppendingString:[@[@"keyboard", @"Did", @"Show:"] componentsJoinedByString:@""]];
+    Method keyboardDidShowMethod = class_getInstanceMethod(NSClassFromString(@"WKWebView"), NSSelectorFromString(keyboardDidShow));
+    
+    if (shouldDisabledDefaultKBHandling) {
+        keyboardWillChangeFrameOriginalIMP = method_getImplementation(keyboardWillChangeFrameMethod);
+        keyboardDidChangeFrameOriginalIMP = method_getImplementation(keyboardDidChangeFrameMethod);
+        keyboardWillShowOriginalIMP = method_getImplementation(keyboardWillShowMethod);
+        keyboardDidShowOriginalIMP = method_getImplementation(keyboardDidShowMethod);
+        
+        IMP newImp = imp_implementationWithBlock(^(id _s) {
+            return nil;
+        });
+        
+        method_setImplementation(keyboardWillChangeFrameMethod, newImp);
+        method_setImplementation(keyboardDidChangeFrameMethod, newImp);
+        method_setImplementation(keyboardWillShowMethod, newImp);
+        method_setImplementation(keyboardDidShowMethod, newImp);
+    } else if (keyboardDidShowOriginalIMP != NULL) {
+        method_setImplementation(keyboardWillChangeFrameMethod, keyboardDidShowOriginalIMP);
+        method_setImplementation(keyboardDidChangeFrameMethod, keyboardDidChangeFrameOriginalIMP);
+        method_setImplementation(keyboardWillShowMethod, keyboardWillShowOriginalIMP);
+        method_setImplementation(keyboardDidShowMethod, keyboardDidShowOriginalIMP);
+    }
+}
 
 #pragma mark Plugin interface
 
@@ -287,18 +307,25 @@ static IMP WKOriginalImp;
     [self.webView endEditing:YES];
 }
 
--(void)setResizeMode:(CDVInvokedUrlCommand *)command
+- (void)setResizeMode:(CDVInvokedUrlCommand *)command
 {
-    NSString * mode = [command.arguments objectAtIndex:0];
-    if ([mode isEqualToString:@"ionic"]) {
-        self.keyboardResizes = ResizeIonic;
-    } else if ([mode isEqualToString:@"body"]) {
-        self.keyboardResizes = ResizeBody;
-    } else if ([mode isEqualToString:@"native"]) {
-        self.keyboardResizes = ResizeNative;
+    NSString *modeString = [command.arguments objectAtIndex:0];
+    ResizePolicy newMode = ResizeNone;
+    if ([modeString isEqualToString:@"ionic"]) {
+        newMode = ResizeIonic;
+    } else if ([modeString isEqualToString:@"body"]) {
+        newMode = ResizeBody;
+    } else if ([modeString isEqualToString:@"native"]) {
+        newMode = ResizeNative;
     } else {
-        self.keyboardResizes = ResizeNone;
+        newMode = ResizeNone;
     }
+    
+    if (self.isWK && self.keyboardResizes != newMode) {
+        [self setDefaultKeyboardHandlingDisalbed:newMode != ResizeNone];
+    }
+    
+    self.keyboardResizes = newMode;
 }
 
 
