@@ -19,7 +19,7 @@ cordova plugin add cordova-plugin-ionic-keyboard --save
 
 #### Possible values
 - `true`: Showing/hiding the keyboard will trigger some kind of resizing of the app (see KeyboardResizeMode)
-- `false`: Web will not be resized when the keyboard shows up.
+- `false`: The Web View will not be resized when the keyboard shows up.
 
 ```xml
 <preference name="KeyboardResize" value="true" />
@@ -34,6 +34,7 @@ cordova plugin add cordova-plugin-ionic-keyboard --save
 - `native`: The whole native webview will be resized when the keyboard shows/hides, it will affect the `vh` relative unit.
 - `body`: Only the html `<body>` element will be resized. Relative units are not affected, because the viewport does not change.
 - `ionic`: Only the html `ion-app` element will be resized. Only for ionic apps.
+- `none`: Web View's default keyboard handling is restored. Events will still be posted.
 
 ```xml
 <preference name="KeyboardResizeMode" value="native" />
